@@ -69,17 +69,18 @@ def render(cookies):
         """, unsafe_allow_html=True)
 
     # --- 2. MÓDULOS ESPECÍFICOS ---
+    # PASSAMOS data_atualizacao PARA TODOS
     elif current_view == "novos":
-        busca_novos.render(df_crowley, cookies)
+        busca_novos.render(df_crowley, cookies, data_atualizacao)
 
     elif current_view == "eca":
-        eca.render(df_crowley, cookies)
+        eca.render(df_crowley, cookies, data_atualizacao)
     
     elif current_view == "ranking":
-        ranking_analitico.render(df_crowley, cookies)
+        ranking_analitico.render(df_crowley, cookies, data_atualizacao)
     
     elif current_view == "flight":
-        flight.render(df_crowley, cookies)
+        flight.render(df_crowley, cookies, data_atualizacao)
     
     else:
         st.error("Página não encontrada.")

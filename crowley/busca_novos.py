@@ -5,8 +5,9 @@ import json
 import io
 from datetime import datetime, timedelta
 
-def render(df_crowley, cookies):
-    # Aumenta o limite de células para estilização (Corrige o erro de tabela grande)
+# RECEBE data_atualizacao COMO ARGUMENTO
+def render(df_crowley, cookies, data_atualizacao):
+    # Aumenta o limite de células para estilização
     pd.set_option("styler.render.max_elements", 2_000_000)
 
     # Botão voltar discreto no topo esquerdo
@@ -23,8 +24,6 @@ def render(df_crowley, cookies):
         st.stop()
 
     # Verifica colunas necessárias
-    # Nota: No loader otimizado, removemos "Data" (string) e deixamos "Data_Dt".
-    # Se "Data_Dt" não existir, tentamos recriar.
     if "Data_Dt" not in df_crowley.columns:
         if "Data" in df_crowley.columns:
             df_crowley["Data_Dt"] = pd.to_datetime(df_crowley["Data"], dayfirst=True, errors="coerce")
@@ -169,7 +168,7 @@ def render(df_crowley, cookies):
                 agg_func = "count"
 
             try:
-                # CORREÇÃO: observed=True para silenciar warning de categorias
+                # observed=True para silenciar warning
                 pivot_table = pd.pivot_table(
                     df_resultado,
                     index="Anunciante",
@@ -185,8 +184,6 @@ def render(df_crowley, cookies):
                 # Exibe Pivot
                 st.markdown("### Visão Geral por Emissora")
                 
-                # A opção st.dataframe não precisa de use_container_width se usar width="stretch" (aviso anterior)
-                # A opção pd.set_option lá no topo resolve o limite de células
                 st.dataframe(
                     pivot_table.style.background_gradient(cmap="Blues", subset=["TOTAL"]).format("{:.0f}"),
                     width="stretch", 
@@ -200,7 +197,6 @@ def render(df_crowley, cookies):
             st.markdown("<br>", unsafe_allow_html=True)
             
             # B) TABELA DETALHADA
-            # 1. Copia e Renomeia
             rename_map = {
                 "Praca": "Praça",
                 "Anuncio": "Anúncio",
@@ -229,9 +225,7 @@ def render(df_crowley, cookies):
             # --- EXPORTAÇÃO EXCEL ---
             st.markdown("---")
             
-            # Wrapper para Loading
             with st.spinner("Carregando Exportação..."):
-                # 1. Cria Dataframe de Filtros
                 filtros_dict = {
                     "Parâmetro": [
                         "Período de Análise (Início)", "Período de Análise (Fim)",
@@ -247,28 +241,23 @@ def render(df_crowley, cookies):
                 }
                 df_filtros_export = pd.DataFrame(filtros_dict)
                 
-                # 2. Gera Arquivo em Memória
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                    # Aba 1: Filtros
                     df_filtros_export.to_excel(writer, sheet_name='Filtros', index=False)
                     worksheet_filtros = writer.sheets['Filtros']
                     worksheet_filtros.set_column('A:A', 30)
                     worksheet_filtros.set_column('B:B', 50)
                     
-                    # Aba 2: Visão Geral (Pivot)
                     if not pivot_table.empty:
                         pivot_table.to_excel(writer, sheet_name='Visão Geral')
                         worksheet_pivot = writer.sheets['Visão Geral']
                         worksheet_pivot.set_column('A:A', 40) 
 
-                    # Aba 3: Detalhamento
                     if not df_exibicao.empty:
                         df_exibicao.to_excel(writer, sheet_name='Detalhamento', index=False)
                         worksheet_detalhe = writer.sheets['Detalhamento']
                         worksheet_detalhe.set_column('A:H', 20)
 
-            # 3. Layout Centralizado do Botão (20% - Coluna 3 de 5)
             c_vazio1, c_vazio2, c_btn, c_vazio3, c_vazio4 = st.columns([1, 1, 1, 1, 1])
             
             with c_btn:
@@ -281,9 +270,9 @@ def render(df_crowley, cookies):
                     use_container_width=True
                 )
             
-            # 4. Rodapé Centralizado
+            # CORREÇÃO DO RODAPÉ AQUI: Usa data_atualizacao
             st.markdown(f"""
                 <div style="text-align: center; color: #666; font-size: 0.8rem; margin-top: 5px;">
-                    Última atualização da base de dados: {datetime.now().strftime('%d/%m/%Y')}
+                    Última atualização da base de dados: {data_atualizacao}
                 </div>
             """, unsafe_allow_html=True)
