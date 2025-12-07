@@ -6,6 +6,9 @@ import io
 from datetime import datetime, timedelta
 
 def render(df_crowley, cookies):
+    # Aumenta o limite de células para estilização (Corrige o erro de tabela grande)
+    pd.set_option("styler.render.max_elements", 2_000_000)
+
     # Botão voltar discreto no topo esquerdo
     if st.button("Voltar", key="btn_voltar_topo"):
         st.query_params["view"] = "menu"
@@ -19,10 +22,16 @@ def render(df_crowley, cookies):
         st.error("Base de dados não carregada.")
         st.stop()
 
-    # A coluna Data_Dt já vem criada do carregador otimizado.
-    # Caso por algum motivo ela não exista (fallback), tentamos criar se "Data" existir.
-    if "Data_Dt" not in df_crowley.columns and "Data" in df_crowley.columns:
-         df_crowley["Data_Dt"] = pd.to_datetime(df_crowley["Data"], dayfirst=True, errors="coerce")
+    # Verifica colunas necessárias
+    # Nota: No loader otimizado, removemos "Data" (string) e deixamos "Data_Dt".
+    # Se "Data_Dt" não existir, tentamos recriar.
+    if "Data_Dt" not in df_crowley.columns:
+        if "Data" in df_crowley.columns:
+            df_crowley["Data_Dt"] = pd.to_datetime(df_crowley["Data"], dayfirst=True, errors="coerce")
+        else:
+            st.error("Coluna de Data não encontrada na base.")
+            st.stop()
+
     # --- PREPARAÇÃO DE FILTROS & COOKIES ---
     saved_filters = {}
     cookie_val = cookies.get("crowley_filters_novos")
@@ -160,19 +169,24 @@ def render(df_crowley, cookies):
                 agg_func = "count"
 
             try:
+                # CORREÇÃO: observed=True para silenciar warning de categorias
                 pivot_table = pd.pivot_table(
                     df_resultado,
                     index="Anunciante",
                     columns="Emissora",
                     values=val_col,
                     aggfunc=agg_func,
-                    fill_value=0
+                    fill_value=0,
+                    observed=True 
                 )
                 pivot_table["TOTAL"] = pivot_table.sum(axis=1)
                 pivot_table = pivot_table.sort_values(by="TOTAL", ascending=False)
                 
                 # Exibe Pivot
                 st.markdown("### Visão Geral por Emissora")
+                
+                # A opção st.dataframe não precisa de use_container_width se usar width="stretch" (aviso anterior)
+                # A opção pd.set_option lá no topo resolve o limite de células
                 st.dataframe(
                     pivot_table.style.background_gradient(cmap="Blues", subset=["TOTAL"]).format("{:.0f}"),
                     width="stretch", 
@@ -246,7 +260,7 @@ def render(df_crowley, cookies):
                     if not pivot_table.empty:
                         pivot_table.to_excel(writer, sheet_name='Visão Geral')
                         worksheet_pivot = writer.sheets['Visão Geral']
-                        worksheet_pivot.set_column('A:A', 40) # Coluna Anunciante mais larga
+                        worksheet_pivot.set_column('A:A', 40) 
 
                     # Aba 3: Detalhamento
                     if not df_exibicao.empty:
