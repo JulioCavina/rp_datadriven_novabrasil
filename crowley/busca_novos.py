@@ -19,9 +19,10 @@ def render(df_crowley, cookies):
         st.error("Base de dados não carregada.")
         st.stop()
 
-    if "Data_Dt" not in df_crowley.columns:
-            df_crowley["Data_Dt"] = pd.to_datetime(df_crowley["Data"], dayfirst=True, errors="coerce")
-
+    # A coluna Data_Dt já vem criada do carregador otimizado.
+    # Caso por algum motivo ela não exista (fallback), tentamos criar se "Data" existir.
+    if "Data_Dt" not in df_crowley.columns and "Data" in df_crowley.columns:
+         df_crowley["Data_Dt"] = pd.to_datetime(df_crowley["Data"], dayfirst=True, errors="coerce")
     # --- PREPARAÇÃO DE FILTROS & COOKIES ---
     saved_filters = {}
     cookie_val = cookies.get("crowley_filters_novos")

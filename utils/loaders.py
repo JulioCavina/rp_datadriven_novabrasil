@@ -71,32 +71,24 @@ def fetch_from_drive():
     temp_path = None
 
     try:
-        # Baixa para disco (Tenta sufixo .parquet por padrão agora)
         temp_path = download_to_temp_file(service, file_id, suffix=".parquet")
-        
-        if not temp_path:
-            return None, "Erro Download"
+        if not temp_path: return None, "Erro Download"
 
-        # 1. Tenta ler como PARQUET (Prioridade)
         try:
             df_raw = pd.read_parquet(temp_path)
         except Exception:
-            # 2. Se falhar, tenta ler como EXCEL (Fallback)
             try:
                 df_raw = pd.read_excel(temp_path, engine="openpyxl")
             except Exception as e:
-                st.error(f"Erro ao ler arquivo de Vendas (Formato desconhecido): {e}")
+                st.error(f"Erro ao ler Vendas: {e}")
                 return None, None
         
-        # Normaliza (trata "vazio", datas, colunas)
         df = normalize_dataframe(df_raw)
-        
         del df_raw
         gc.collect()
 
         if df.empty: return None, "Dados Vazios"
 
-        # Data de atualização baseada na coluna data_ref
         ultima_atualizacao = "N/A"
         if "data_ref" in df.columns and pd.api.types.is_datetime64_any_dtype(df["data_ref"]):
             max_date = df["data_ref"].max()
@@ -122,7 +114,7 @@ def load_main_base():
         return st.session_state.uploaded_dataframe, st.session_state.get("uploaded_timestamp", "Upload Manual")
     return fetch_from_drive()
 
-# --- CARREGAMENTO BASE CROWLEY (PARQUET) ---
+# --- CARREGAMENTO BASE CROWLEY (PARQUET - ULTRA OTIMIZADO) ---
 
 @st.cache_data(ttl=3600, show_spinner="Acessando base Crowley (Otimizado)...")
 def load_crowley_base():
@@ -133,17 +125,42 @@ def load_crowley_base():
     temp_path = None
 
     try:
+        # 1. Download para disco
         temp_path = download_to_temp_file(service, file_id, suffix=".parquet")
-        
         if not temp_path: return None, "Erro Download"
 
+        # 2. Leitura
         df = pd.read_parquet(temp_path)
         
+        # 3. OTIMIZAÇÃO DE MEMÓRIA (Strings -> Categories)
+        # Convertemos todas as colunas que têm baixa cardinalidade (muita repetição)
+        cols_para_categoria = ["Praca", "Emissora", "Anunciante", "Anuncio", "Tipo", "DayPart"]
+        
+        for col in cols_para_categoria:
+            if col in df.columns:
+                # Converte para categoria para economizar até 90% de RAM na coluna
+                df[col] = df[col].astype("category")
+
+        # 4. Otimização de Números (Downcast)
+        # Se os números forem pequenos (ex: inserções de 0 a 100), não precisa de int64
+        cols_numericas = ["Volume de Insercoes", "Duracao"]
+        for col in cols_numericas:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], downcast="integer")
+
+        # 5. Processamento de Data e Limpeza
         ultima_atualizacao = "N/A"
         if "Data" in df.columns:
+            # Converte para datetime (ocupa menos que string 'YYYY-MM-DD...')
+            df["Data_Dt"] = pd.to_datetime(df["Data"], dayfirst=True, errors="coerce")
+            
+            # REMOVE a coluna original de string para liberar RAM imediatamente
+            # (Se precisar exibir, usamos o .dt.strftime na hora)
+            df.drop(columns=["Data"], inplace=True)
+            
+            # Pega a data mais recente
             try:
-                # Otimização: Pega o max sem converter a coluna toda se possível, ou converte temporariamente
-                max_ts = pd.to_datetime(df["Data"], dayfirst=True, errors="coerce").max()
+                max_ts = df["Data_Dt"].max()
                 if pd.notna(max_ts):
                     ultima_atualizacao = max_ts.strftime("%d/%m/%Y")
             except:
@@ -159,7 +176,9 @@ def load_crowley_base():
         return None, "Erro Leitura"
         
     finally:
+        # Limpeza do arquivo temporário
         if temp_path and os.path.exists(temp_path):
             try: os.remove(temp_path)
             except: pass
+        # Força o Python a liberar a memória não utilizada agora
         gc.collect()
