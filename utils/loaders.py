@@ -1,5 +1,4 @@
 # utils/loaders.py
-import io
 import os
 import gc
 import tempfile
@@ -29,82 +28,13 @@ def get_drive_service():
         st.error(f"Erro na autenticação do Drive: {e}")
         return None
 
-# --- CARREGAMENTO BASE DE VENDAS (EXCEL) ---
-
-@st.cache_data(ttl=3600, show_spinner="Carregando do Data Lake (Vendas)...")
-def fetch_from_drive():
-    service = get_drive_service()
-    if not service: return None, None
-
-    file_id = st.secrets["drive_files"]["faturamento_xlsx"]
-    
+def download_to_temp_file(service, file_id, suffix):
+    """
+    Baixa um arquivo do Drive para uma pasta temporária no disco.
+    Retorna o caminho do arquivo.
+    """
     try:
-        # Excel geralmente é menor, mantemos em memória (BytesIO) por ser mais rápido para openpyxl
-        request = service.files().get_media(fileId=file_id)
-        file_io = io.BytesIO()
-        downloader = MediaIoBaseDownload(file_io, request)
-        
-        done = False
-        while not done: status, done = downloader.next_chunk()
-        file_io.seek(0)
-        
-        # Leitura
-        df_raw = pd.read_excel(file_io, engine="openpyxl")
-        df = normalize_dataframe(df_raw)
-        
-        # Limpeza imediata de memória
-        file_io.close()
-        del file_io
-        gc.collect()
-
-        if df.empty: return None, "Dados Vazios"
-
-        # Data de atualização
-        ultima_atualizacao = "N/A"
-        if "data_ref" in df.columns and pd.api.types.is_datetime64_any_dtype(df["data_ref"]):
-            max_date = df["data_ref"].max()
-            if pd.notna(max_date): ultima_atualizacao = max_date.strftime("%m/%Y")
-        
-        if ultima_atualizacao == "N/A":
-            file_metadata = service.files().get(fileId=file_id, fields="modifiedTime").execute()
-            mod_time_str = file_metadata.get("modifiedTime")
-            if mod_time_str:
-                mod_dt = datetime.strptime(mod_time_str[:19], "%Y-%m-%dT%H:%M:%S")
-                ultima_atualizacao = mod_dt.strftime("%d/%m/%Y %H:%M")
-            else:
-                ultima_atualizacao = datetime.now().strftime("%d/%m/%Y %H:%M")
-            
-        return df, ultima_atualizacao
-
-    except Exception as e:
-        print(f"Erro Drive Vendas: {e}")
-        return None, None
-
-def load_main_base():
-    if "uploaded_dataframe" in st.session_state and st.session_state.uploaded_dataframe is not None:
-        return st.session_state.uploaded_dataframe, st.session_state.get("uploaded_timestamp", "Upload Manual")
-    return fetch_from_drive()
-
-
-# --- CARREGAMENTO BASE CROWLEY (PARQUET) ---
-
-@st.cache_data(ttl=3600, show_spinner="Acessando base Crowley...")
-def load_crowley_base():
-    """
-    Usa arquivo temporário em disco para evitar estouro de memória RAM
-    durante o download de arquivos grandes (Parquet).
-    """
-    service = get_drive_service()
-    if not service: return None, "Erro Conexão"
-
-    file_id = st.secrets["drive_files"]["crowley_parquet"]
-
-    # Cria arquivo temporário no disco (delete=False para podermos fechar, ler e depois apagar manualmente)
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as tmp_file:
-        temp_filename = tmp_file.name
-        
-        try:
-            # 1. Download Streamado para o Disco (Economiza RAM)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
             request = service.files().get_media(fileId=file_id)
             downloader = MediaIoBaseDownload(tmp_file, request)
             
@@ -112,39 +42,124 @@ def load_crowley_base():
             while not done:
                 status, done = downloader.next_chunk()
             
-            # Garante que os dados foram escritos no disco
             tmp_file.flush()
-            tmp_file.close() 
+            return tmp_file.name
+    except Exception as e:
+        print(f"Erro no download temporário: {e}")
+        return None
 
-            # 2. Leitura Otimizada do Parquet
-            # Selecionamos apenas colunas essenciais se necessário para economizar mais memória
-            # Mas o uso do disco já deve resolver o crash principal.
-            df = pd.read_parquet(temp_filename)
+def get_file_modified_time(service, file_id):
+    """Obtém a data de modificação do arquivo no Drive."""
+    try:
+        file_metadata = service.files().get(fileId=file_id, fields="modifiedTime").execute()
+        mod_time_str = file_metadata.get("modifiedTime")
+        if mod_time_str:
+            mod_dt = datetime.strptime(mod_time_str[:19], "%Y-%m-%dT%H:%M:%S")
+            return mod_dt.strftime("%d/%m/%Y %H:%M")
+    except:
+        pass
+    return datetime.now().strftime("%d/%m/%Y %H:%M")
 
-            # 3. Processamento de Data
-            ultima_atualizacao = "N/A"
-            if "Data" in df.columns:
-                # Converte apenas se necessário e tenta otimizar memória
-                df["Data_Dt"] = pd.to_datetime(df["Data"], dayfirst=True, errors="coerce")
-                max_date = df["Data_Dt"].max()
-                if pd.notna(max_date):
-                    ultima_atualizacao = max_date.strftime("%d/%m/%Y")
+# --- CARREGAMENTO BASE DE VENDAS (FATURAMENTO) ---
 
-            if ultima_atualizacao == "N/A":
-                file_metadata = service.files().get(fileId=file_id, fields="modifiedTime").execute()
-                mod_time_str = file_metadata.get("modifiedTime")
-                if mod_time_str:
-                    mod_dt = datetime.strptime(mod_time_str[:19], "%Y-%m-%dT%H:%M:%S")
-                    ultima_atualizacao = mod_dt.strftime("%d/%m/%Y")
+@st.cache_data(ttl=3600, show_spinner="Carregando do Data Lake (Vendas)...")
+def fetch_from_drive():
+    service = get_drive_service()
+    if not service: return None, None
 
-            return df, ultima_atualizacao
+    file_id = st.secrets["drive_files"]["faturamento_xlsx"]
+    temp_path = None
 
-        except Exception as e:
-            st.error(f"Erro ao processar Crowley: {e}")
-            return None, "Erro Leitura"
+    try:
+        # Baixa para disco (Tenta sufixo .parquet por padrão agora)
+        temp_path = download_to_temp_file(service, file_id, suffix=".parquet")
         
-        finally:
-            # 4. Limpeza Crítica: Apaga o arquivo temporário e libera RAM
-            if os.path.exists(temp_filename):
-                os.remove(temp_filename)
-            gc.collect()
+        if not temp_path:
+            return None, "Erro Download"
+
+        # 1. Tenta ler como PARQUET (Prioridade)
+        try:
+            df_raw = pd.read_parquet(temp_path)
+        except Exception:
+            # 2. Se falhar, tenta ler como EXCEL (Fallback)
+            try:
+                df_raw = pd.read_excel(temp_path, engine="openpyxl")
+            except Exception as e:
+                st.error(f"Erro ao ler arquivo de Vendas (Formato desconhecido): {e}")
+                return None, None
+        
+        # Normaliza (trata "vazio", datas, colunas)
+        df = normalize_dataframe(df_raw)
+        
+        del df_raw
+        gc.collect()
+
+        if df.empty: return None, "Dados Vazios"
+
+        # Data de atualização baseada na coluna data_ref
+        ultima_atualizacao = "N/A"
+        if "data_ref" in df.columns and pd.api.types.is_datetime64_any_dtype(df["data_ref"]):
+            max_date = df["data_ref"].max()
+            if pd.notna(max_date): ultima_atualizacao = max_date.strftime("%m/%Y")
+        
+        if ultima_atualizacao == "N/A":
+            ultima_atualizacao = get_file_modified_time(service, file_id)
+            
+        return df, ultima_atualizacao
+
+    except Exception as e:
+        print(f"Erro Drive Vendas: {e}")
+        return None, None
+    
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try: os.remove(temp_path)
+            except: pass
+        gc.collect()
+
+def load_main_base():
+    if "uploaded_dataframe" in st.session_state and st.session_state.uploaded_dataframe is not None:
+        return st.session_state.uploaded_dataframe, st.session_state.get("uploaded_timestamp", "Upload Manual")
+    return fetch_from_drive()
+
+# --- CARREGAMENTO BASE CROWLEY (PARQUET) ---
+
+@st.cache_data(ttl=3600, show_spinner="Acessando base Crowley (Otimizado)...")
+def load_crowley_base():
+    service = get_drive_service()
+    if not service: return None, "Erro Conexão"
+
+    file_id = st.secrets["drive_files"]["crowley_parquet"]
+    temp_path = None
+
+    try:
+        temp_path = download_to_temp_file(service, file_id, suffix=".parquet")
+        
+        if not temp_path: return None, "Erro Download"
+
+        df = pd.read_parquet(temp_path)
+        
+        ultima_atualizacao = "N/A"
+        if "Data" in df.columns:
+            try:
+                # Otimização: Pega o max sem converter a coluna toda se possível, ou converte temporariamente
+                max_ts = pd.to_datetime(df["Data"], dayfirst=True, errors="coerce").max()
+                if pd.notna(max_ts):
+                    ultima_atualizacao = max_ts.strftime("%d/%m/%Y")
+            except:
+                pass
+
+        if ultima_atualizacao == "N/A":
+            ultima_atualizacao = get_file_modified_time(service, file_id)
+
+        return df, ultima_atualizacao
+
+    except Exception as e:
+        st.error(f"Erro ao processar Crowley: {e}")
+        return None, "Erro Leitura"
+        
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try: os.remove(temp_path)
+            except: pass
+        gc.collect()
