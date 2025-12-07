@@ -1,0 +1,7 @@
+import streamlit as st
+def render(df_crowley, cookies):
+    if st.button("Voltar ao Menu Crowley"):
+        st.query_params["view"] = "menu"
+        st.rerun()
+    st.subheader("Ranking Analítico")
+    st.info("Módulo em desenvolvimento.")

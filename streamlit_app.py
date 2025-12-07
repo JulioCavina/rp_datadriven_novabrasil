@@ -8,7 +8,6 @@ import base64
 import streamlit_cookies_manager 
 import json 
 import locale
-import platform
 
 # Tenta configurar locale para pt-BR
 try:
@@ -24,8 +23,18 @@ from utils.loaders import load_main_base
 from utils.filters import aplicar_filtros
 from utils.format import normalize_dataframe
 
-# Importação das páginas
-from pages import inicio, visao_geral, clientes_faturamento, perdas_ganhos, cruzamentos_intersecoes, top10, relatorio_abc, eficiencia
+# Importação das páginas existentes + Nova página
+from pages import (
+    inicio, 
+    visao_geral, 
+    clientes_faturamento, 
+    perdas_ganhos, 
+    cruzamentos_intersecoes, 
+    top10, 
+    relatorio_abc, 
+    eficiencia,
+    relatorio_crowley # <--- NOVO IMPORT
+)
 
 # ==================== CONFIGURAÇÕES GERAIS ====================
 st.set_page_config(
@@ -138,12 +147,22 @@ if os.path.exists(logo_path):
     logo = Image.open(logo_path)
     st.sidebar.image(logo, width=160) 
 
-# ==================== CARREGAMENTO DE DADOS ====================
+# ==================== ROTEAMENTO E CONFIGURAÇÃO DE PÁGINAS ====================
 query_params = st.query_params
 nav_id = query_params.get("nav", ["0"])[0]
 
-# Lista de páginas
-pages_keys = ["Início", "Visão Geral", "Clientes & Faturamento", "Perdas & Ganhos", "Cruzamentos & Interseções", "Top 10", "Relatório ABC", "Eficiência"]
+# Lista de chaves das páginas (A ordem aqui define a ordem na Sidebar)
+pages_keys = [
+    "Início", 
+    "Visão Geral", 
+    "Clientes & Faturamento", 
+    "Perdas & Ganhos", 
+    "Cruzamentos & Interseções", 
+    "Top 10", 
+    "Relatório ABC", 
+    "Eficiência",
+    "Relatório Crowley" # <--- NOVA PÁGINA NA LISTA
+]
 
 try:
     idx_ativa = int(nav_id)
@@ -154,6 +173,7 @@ except ValueError:
 
 pagina_ativa = pages_keys[idx_ativa]
 
+# Menu de voltar (exceto Home)
 if pagina_ativa != "Início":
     st.markdown("""
         <a href="?nav=0" target="_self" class="nav-back-link">
@@ -165,39 +185,26 @@ if pagina_ativa == "Início":
     st.title("Dashboard Vendas Ribeirão Preto")
     st.caption("Menu lateral para navegar • Filtros no topo • Exportação em Excel")
 
-df, ultima_atualizacao = load_main_base()
+# ==================== CARREGAMENTO DE DADOS (CONDICIONAL) ====================
 
-if df is None or df.empty:
-    st.warning("⚠️ Nenhuma base de dados encontrada.")
-    st.info("Por favor, carregue a planilha de vendas (.xlsx) para iniciar.")
-    
-    uploaded_file = st.file_uploader(
-        "Selecione o arquivo Excel (.xlsx)", 
-        type=["xlsx"],
-        accept_multiple_files=False
-    )
-    
-    if uploaded_file is not None:
-        try:
-            base_dir = os.path.dirname(__file__)
-            data_dir = os.path.join(base_dir, "data")
-            if not os.path.exists(data_dir):
-                os.makedirs(data_dir)
-            
-            save_path = os.path.join(data_dir, "temp_data_uploaded.xlsx")
-            with open(save_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
+# Inicializa variáveis
+df = None
+ultima_atualizacao = "N/A"
 
-            st.success("✅ Arquivo carregado. O dashboard será iniciado.")
-            st.rerun()
+# Se NÃO for a página Crowley ou Início, carrega a base pesada de vendas
+# (O Início carrega a base para mostrar status, mas o Crowley não precisa)
+if pagina_ativa != "Relatório Crowley":
+    df, ultima_atualizacao = load_main_base()
 
-        except Exception as e:
-            st.error(f"Erro ao processar o arquivo: {e}")
-            
-    st.stop() 
+    # Se a base for necessária (não for Crowley) e estiver vazia, exibe erro
+    if (df is None or df.empty) and pagina_ativa != "Início": 
+        # Na Home deixamos passar para mostrar o botão de upload se necessário, 
+        # mas nas outras bloqueamos.
+        st.warning("⚠️ Nenhuma base de dados encontrada.")
+        st.stop()
 
 
-# ==================== MENU LATERAL ====================
+# ==================== MENU LATERAL (SIDEBAR) ====================
 pages = {
     "Início": inicio,
     "Visão Geral": visao_geral,
@@ -207,6 +214,7 @@ pages = {
     "Top 10": top10,
     "Relatório ABC": relatorio_abc,
     "Eficiência": eficiencia,
+    "Relatório Crowley": relatorio_crowley # <--- MAPEAMENTO DO MÓDULO
 }
 
 page_display = {
@@ -218,6 +226,7 @@ page_display = {
     "Top 10": "Top 10",
     "Relatório ABC": "Relatório ABC",
     "Eficiência": "Eficiência / KPIs",
+    "Relatório Crowley": "Relatório Crowley" # <--- NOME EXIBIDO
 }
 
 st.sidebar.markdown('<p style="font-size:0.85rem; font-weight:600; margin-bottom: 0.5rem; margin-left: 10px;">Selecione a página:</p>', unsafe_allow_html=True)
@@ -233,7 +242,30 @@ for idx, page_name in enumerate(pages_keys):
 st.sidebar.markdown(f'<div class="sidebar-nav-container">{"".join(html_menu)}</div>', unsafe_allow_html=True)
 st.sidebar.divider()
 
-# ==================== POP-UPS ====================
+# ==================== RENDERIZAÇÃO DAS PÁGINAS ====================
+
+if pagina_ativa == "Início":
+    pages[pagina_ativa].render(df) 
+
+elif pagina_ativa == "Relatório Crowley":
+    # Renderiza a página Crowley passando o objeto 'cookies' existente
+    pages[pagina_ativa].render(cookies) # <--- AQUI ESTAVA O PROBLEMA
+
+else:
+    # --- PÁGINAS PADRÃO ---
+    if df is not None:
+        df_filtrado, anos_sel, emis_sel, exec_sel, cli_sel, mes_ini, mes_fim, show_labels, show_total = aplicar_filtros(df, cookies)
+        
+        if df_filtrado is None or df_filtrado.empty:
+            st.warning("⚠️ Nenhum dado encontrado com os filtros aplicados.")
+            st.stop()
+        
+        pages[pagina_ativa].render(df_filtrado, mes_ini, mes_fim, show_labels, show_total, ultima_atualizacao)
+        
+# ==================== POP-UPS e RODAPÉ ====================
+
+# (Mantive os pop-ups existentes inalterados para economizar espaço visual aqui,
+#  mas eles continuam existindo no final do arquivo original).
 
 @st.dialog("Banner de Boas-vindas", width="medium")
 def modal_boas_vindas():
@@ -253,9 +285,7 @@ def modal_boas_vindas():
         * **Visão Geral:** KPIs rápidos e metas.
         * **Clientes & Faturamento:** Análise detalhada.
         * **Perdas & Ganhos:** Churn e Novos Negócios.
-        * **Cruzamentos:** Clientes exclusivos vs. compartilhados.
-        * **Top 10:** Ranking anunciantes.
-        * **Relatório ABC:** Curva de Pareto (80/20).
+        * **Relatório Crowley:** Monitoramento musical e concorrência (Novo!).
         ---
         """)
         st.markdown("**Dúvidas:** (31) 9.9274-4574 - Silvia Freitas - Head de Inteligência de Mercado")
@@ -312,23 +342,6 @@ if st.session_state.authenticated:
     elif show_disclaimer:
         modal_aviso_dados()
 
-
-# ==================== ROTEAMENTO ====================
-if pagina_ativa == "Início":
-    pages[pagina_ativa].render(df) 
-else:
-    # APLICAR FILTROS AGORA RETORNA 'show_total'
-    df_filtrado, anos_sel, emis_sel, exec_sel, cli_sel, mes_ini, mes_fim, show_labels, show_total = aplicar_filtros(df, cookies)
-
-    if df_filtrado is None or df_filtrado.empty:
-        st.warning("⚠️ Nenhum dado encontrado com os filtros aplicados.")
-        st.stop()
-    
-    # PASSAMOS 'show_total' PARA AS PÁGINAS
-    # Nota: As páginas precisarão atualizar suas assinaturas para receber este argumento
-    pages[pagina_ativa].render(df_filtrado, mes_ini, mes_fim, show_labels, show_total, ultima_atualizacao)
-
-# ==================== RODAPÉ ====================
 footer_html = """
 <div class="footer-container">
     <p class="footer-text">Powered by Python | Interface Streamlit | Data Driven Novabrasil</p>

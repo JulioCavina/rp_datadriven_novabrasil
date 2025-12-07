@@ -1,82 +1,138 @@
 # utils/loaders.py
-import os
+import io
 import pandas as pd
 import streamlit as st
 from datetime import datetime
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 from .format import normalize_dataframe
 
-def load_main_base():
+# Função genérica de download do Drive (reutilizável)
+def _download_file_from_drive(file_id_key):
     """
-    Carrega a base principal.
-    Prioridade:
-    1. Procura em st.session_state (se o usuário fez upload).
-    2. Procura na pasta /data (arquivo .xlsx).
-    Retorna (df, data_modificação) ou (None, None) se nada for encontrado.
+    Baixa arquivo do Drive retornando BytesIO.
+    file_id_key: chave dentro de st.secrets["drive_files"]
     """
-    
-    # --- 1. Verifica se o usuário já fez upload de um arquivo nesta sessão ---
-    if "uploaded_dataframe" in st.session_state and st.session_state.uploaded_dataframe is not None:
-        df = st.session_state.uploaded_dataframe
-        data_modificacao = st.session_state.get("uploaded_timestamp", "Sessão Atual")
-        return df, data_modificacao
-
-    # --- 2. Se não houver, procura na pasta /data ---
-    base_dir = os.path.dirname(os.path.dirname(__file__)) 
-    data_dir = os.path.join(base_dir, "data")
-
-    if not os.path.exists(data_dir):
-        os.makedirs(data_dir) # Cria a pasta se não existir
-
+    if "gcp_service_account" not in st.secrets or "drive_files" not in st.secrets:
+        st.error("❌ Erro: Segredos de configuração (Secrets) não encontrados.")
+        return None
+        
     try:
-        excel_files = [f for f in os.listdir(data_dir) if f.lower().endswith(".xlsx")]
-    except FileNotFoundError:
-        st.error(f"❌ Erro: O diretório '{data_dir}' não foi encontrado.")
+        service_account_info = dict(st.secrets["gcp_service_account"])
+        creds = service_account.Credentials.from_service_account_info(
+            service_account_info, scopes=['https://www.googleapis.com/auth/drive.readonly']
+        )
+        service = build('drive', 'v3', credentials=creds)
+        file_id = st.secrets["drive_files"][file_id_key]
+        
+        request = service.files().get_media(fileId=file_id)
+        file_io = io.BytesIO()
+        downloader = MediaIoBaseDownload(file_io, request)
+        
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+        
+        file_io.seek(0)
+        return file_io, service, file_id
+    except Exception as e:
+        print(f"Erro download Drive ({file_id_key}): {e}")
+        return None, None, None
+
+@st.cache_data(ttl=3600, show_spinner="Carregando do Data Lake...")
+def fetch_from_drive():
+    # ... (código existente da função fetch_from_drive mantido igual) ...
+    # Apenas copiei a lógica interna para o helper _download_file_from_drive se quiser refatorar depois,
+    # mas para não quebrar o que já funciona, manterei fetch_from_drive como estava ou usando o helper.
+    # Vou manter o fetch_from_drive original intacto para segurança e criar o novo load_crowley separado.
+    
+    # REPETINDO O CÓDIGO ORIGINAL DA FETCH_FROM_DRIVE PARA GARANTIR ESTABILIDADE
+    if "gcp_service_account" not in st.secrets or "drive_files" not in st.secrets:
+        st.error("❌ Erro: Segredos não encontrados.")
         return None, None
 
-    if excel_files:
-        file_path = os.path.join(data_dir, excel_files[0]) # Pega o primeiro .xlsx que encontrar
-        try:
-            df_raw = pd.read_excel(file_path, engine="openpyxl")
-            df = normalize_dataframe(df_raw)
-            if df.empty:
-                st.warning("⚠️ Base encontrada, mas sem dados válidos.")
-                return None, None
-
-            # --- NOVA LÓGICA: PEGAR ÚLTIMO MÊS/ANO DA BASE ---
-            ultima_atualizacao = "N/A" 
-            if "data_ref" in df.columns and pd.api.types.is_datetime64_any_dtype(df["data_ref"]):
-                
-                # Pega a data mais recente válida
-                latest_date = df["data_ref"].max()
-                
-                if pd.notna(latest_date):
-                    latest_month = latest_date.month
-                    latest_year = latest_date.year
-                    # Formata como MM/YYYY (02d garante o zero à esquerda)
-                    ultima_atualizacao = f"{latest_month:02d}/{latest_year}"
-                else:
-                    ultima_atualizacao = "Data Inválida"
-
-            else:
-                # Fallback para o tempo de modificação do arquivo se data_ref não estiver disponível
-                mod_time = datetime.fromtimestamp(os.path.getmtime(file_path))
-                ultima_atualizacao = mod_time.strftime("%d/%m/%Y")
-            # --- FIM DA NOVA LÓGICA ---
-
-            # Salva no cache da sessão para não precisar ler do disco toda hora
-            st.session_state.uploaded_dataframe = df
-            st.session_state.uploaded_timestamp = ultima_atualizacao
-            
-            return df, ultima_atualizacao
+    try:
+        service_account_info = dict(st.secrets["gcp_service_account"])
+        creds = service_account.Credentials.from_service_account_info(
+            service_account_info, scopes=['https://www.googleapis.com/auth/drive.readonly']
+        )
+        service = build('drive', 'v3', credentials=creds)
+        file_id = st.secrets["drive_files"]["faturamento_xlsx"]
+        request = service.files().get_media(fileId=file_id)
+        file_io = io.BytesIO()
+        downloader = MediaIoBaseDownload(file_io, request)
+        done = False
+        while not done: status, done = downloader.next_chunk()
+        file_io.seek(0)
         
-        except Exception as e:
-            st.error(f"Erro ao ler base {file_path}: {e}")
-            return None, None
+        df_raw = pd.read_excel(file_io, engine="openpyxl")
+        df = normalize_dataframe(df_raw)
+        
+        if df.empty: return None, "Dados Vazios"
 
-    # --- 3. Se não encontrou em nenhum lugar ---
-    return None, None
+        ultima_atualizacao = "N/A"
+        if "data_ref" in df.columns and pd.api.types.is_datetime64_any_dtype(df["data_ref"]):
+            max_date = df["data_ref"].max()
+            if pd.notna(max_date): ultima_atualizacao = max_date.strftime("%m/%Y")
+        
+        if ultima_atualizacao == "N/A":
+            file_metadata = service.files().get(fileId=file_id, fields="modifiedTime").execute()
+            mod_time_str = file_metadata.get("modifiedTime")
+            if mod_time_str:
+                mod_dt = datetime.strptime(mod_time_str[:19], "%Y-%m-%dT%H:%M:%S")
+                ultima_atualizacao = mod_dt.strftime("%d/%m/%Y %H:%M")
+            else:
+                ultima_atualizacao = datetime.now().strftime("%d/%m/%Y %H:%M")
+            
+        return df, ultima_atualizacao
+    except Exception as e:
+        print(f"Erro Drive: {e}")
+        return None, None
 
+def load_main_base():
+    if "uploaded_dataframe" in st.session_state and st.session_state.uploaded_dataframe is not None:
+        return st.session_state.uploaded_dataframe, st.session_state.get("uploaded_timestamp", "Upload Manual")
+    return fetch_from_drive()
 
+# --- NOVA FUNÇÃO CROWLEY ---
+@st.cache_data(ttl=3600, show_spinner="Acessando base Crowley...")
 def load_crowley_base():
-    """Placeholder para base Crowley (não usada atualmente)."""
-    return None, None
+    """
+    Carrega o arquivo PARQUET do Crowley e retorna DF + Data de Atualização.
+    """
+    file_io, service, file_id = _download_file_from_drive("crowley_parquet")
+    
+    if not file_io:
+        return None, "Erro Conexão"
+        
+    try:
+        # Lê Parquet
+        df = pd.read_parquet(file_io)
+        
+        # Determina Data
+        # Formato esperado: '26/11/2025 12:00:00 AM'
+        ultima_atualizacao = "N/A"
+        
+        if "Data" in df.columns:
+            # Converte para datetime
+            # O formato misto com AM/PM pode exigir tratamento específico
+            df["Data_Dt"] = pd.to_datetime(df["Data"], dayfirst=True, errors="coerce")
+            
+            max_date = df["Data_Dt"].max()
+            if pd.notna(max_date):
+                ultima_atualizacao = max_date.strftime("%d/%m/%Y")
+        
+        # Fallback para metadados do arquivo se a coluna falhar
+        if ultima_atualizacao == "N/A" and service:
+            file_metadata = service.files().get(fileId=file_id, fields="modifiedTime").execute()
+            mod_time_str = file_metadata.get("modifiedTime")
+            if mod_time_str:
+                mod_dt = datetime.strptime(mod_time_str[:19], "%Y-%m-%dT%H:%M:%S")
+                ultima_atualizacao = mod_dt.strftime("%d/%m/%Y")
+
+        return df, ultima_atualizacao
+        
+    except Exception as e:
+        st.error(f"Erro ao ler Parquet Crowley: {e}")
+        return None, "Erro Leitura"

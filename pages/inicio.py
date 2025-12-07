@@ -5,7 +5,7 @@ from PIL import Image
 import os
 
 def render(df=None):
-    # ==================== CSS DO GRID 2x3 (AJUSTADO PARA 7 ITENS) ====================
+    # ==================== CSS DO GRID (AJUSTADO PARA 8 ITENS) ====================
     st.markdown("""
         <style>
         .nb-container {
@@ -20,7 +20,7 @@ def render(df=None):
         .nb-grid {
             display: grid;
             grid-template-columns: repeat(3, 240px);
-            /* CORREÇÃO: Aumentado para 3 linhas para caber o 7º item sem quebrar */
+            /* 3 linhas são suficientes para até 9 itens (3x3) */
             grid-template-rows: repeat(3, 130px);
             gap: 1.5rem;
             justify-content: center;
@@ -91,14 +91,14 @@ def render(df=None):
     st.markdown("### Acesse diretamente uma das seções:")
 
     # ==================== BOTÕES HTML CLICÁVEIS ====================
-    # ATUALIZADO: Links corretos para as novas páginas (índices atualizados)
     # 1: Visão Geral
     # 2: Clientes
     # 3: Perdas
     # 4: Cruzamentos
     # 5: Top 10
-    # 6: Relatório ABC (Antigo Crowley)
-    # 7: Eficiência (Novo)
+    # 6: Relatório ABC
+    # 7: Eficiência
+    # 8: Relatório Crowley (NOVO)
     
     st.markdown("""
     <div class="nb-container">
@@ -110,6 +110,8 @@ def render(df=None):
         <a href="?nav=5" target="_self" class="nb-card">Top 10 Anunciantes</a>
         <a href="?nav=6" target="_self" class="nb-card">Relatório ABC</a>
         <a href="?nav=7" target="_self" class="nb-card">Eficiência / KPIs</a>
+        <a href="?nav=8" target="_self" class="nb-card">Relatório Crowley</a>
       </div>
     </div>
     """, unsafe_allow_html=True)
+
