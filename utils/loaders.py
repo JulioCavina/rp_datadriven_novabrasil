@@ -14,6 +14,7 @@ from .format import normalize_dataframe
 
 def get_drive_service():
     """Autentica e retorna o serviço do Google Drive."""
+    # Verificação de segurança para não crashar se secrets não existirem
     if "gcp_service_account" not in st.secrets or "drive_files" not in st.secrets:
         st.error("❌ Erro: Segredos de configuração (Secrets) não encontrados.")
         return None
@@ -34,6 +35,7 @@ def download_to_temp_file(service, file_id, suffix):
     Retorna o caminho do arquivo.
     """
     try:
+        # Delete=False é necessário para Windows/alguns Linux para permitir reabertura
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
             request = service.files().get_media(fileId=file_id)
             downloader = MediaIoBaseDownload(tmp_file, request)
@@ -62,8 +64,12 @@ def get_file_modified_time(service, file_id):
 
 # --- CARREGAMENTO BASE DE VENDAS (FATURAMENTO) ---
 
-@st.cache_data(ttl=3600, show_spinner="Carregando do Data Lake (Vendas)...")
+# MUDANÇA 1: cache_resource gasta menos RAM pois não serializa o objeto
+@st.cache_resource(ttl=3600, show_spinner="Carregando do Data Lake (Vendas)...")
 def fetch_from_drive():
+    # Limpeza preventiva antes de começar
+    gc.collect()
+    
     service = get_drive_service()
     if not service: return None, None
 
@@ -84,6 +90,8 @@ def fetch_from_drive():
                 return None, None
         
         df = normalize_dataframe(df_raw)
+        
+        # Libera memória imediatamente
         del df_raw
         gc.collect()
 
@@ -116,8 +124,12 @@ def load_main_base():
 
 # --- CARREGAMENTO BASE CROWLEY (PARQUET - ULTRA OTIMIZADO) ---
 
-@st.cache_data(ttl=3600, show_spinner="Acessando base Crowley (Otimizado)...")
+# MUDANÇA 1: cache_resource é vital aqui para evitar duplicar a base na memória
+@st.cache_resource(ttl=3600, show_spinner="Acessando base Crowley (Otimizado)...")
 def load_crowley_base():
+    # Limpeza preventiva: tenta liberar espaço da versão antiga se possível
+    gc.collect()
+
     service = get_drive_service()
     if not service: return None, "Erro Conexão"
 
@@ -125,40 +137,32 @@ def load_crowley_base():
     temp_path = None
 
     try:
-        # 1. Download para disco
         temp_path = download_to_temp_file(service, file_id, suffix=".parquet")
         if not temp_path: return None, "Erro Download"
 
-        # 2. Leitura
         df = pd.read_parquet(temp_path)
         
-        # 3. OTIMIZAÇÃO DE MEMÓRIA (Strings -> Categories)
-        # Convertemos todas as colunas que têm baixa cardinalidade (muita repetição)
+        # OTIMIZAÇÃO: Converter Strings para Categorias
         cols_para_categoria = ["Praca", "Emissora", "Anunciante", "Anuncio", "Tipo", "DayPart"]
-        
         for col in cols_para_categoria:
             if col in df.columns:
-                # Converte para categoria para economizar até 90% de RAM na coluna
                 df[col] = df[col].astype("category")
 
-        # 4. Otimização de Números (Downcast)
-        # Se os números forem pequenos (ex: inserções de 0 a 100), não precisa de int64
+        # OTIMIZAÇÃO: Downcast Numérico
         cols_numericas = ["Volume de Insercoes", "Duracao"]
         for col in cols_numericas:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], downcast="integer")
 
-        # 5. Processamento de Data e Limpeza
+        # DATA: Datetime
         ultima_atualizacao = "N/A"
         if "Data" in df.columns:
-            # Converte para datetime (ocupa menos que string 'YYYY-MM-DD...')
+            # Converte e sobrescreve
             df["Data_Dt"] = pd.to_datetime(df["Data"], dayfirst=True, errors="coerce")
             
-            # REMOVE a coluna original de string para liberar RAM imediatamente
-            # (Se precisar exibir, usamos o .dt.strftime na hora)
+            # Remove a original string para liberar memória
             df.drop(columns=["Data"], inplace=True)
             
-            # Pega a data mais recente
             try:
                 max_ts = df["Data_Dt"].max()
                 if pd.notna(max_ts):
@@ -176,9 +180,9 @@ def load_crowley_base():
         return None, "Erro Leitura"
         
     finally:
-        # Limpeza do arquivo temporário
+        # Garante que o arquivo temporário no disco seja deletado
         if temp_path and os.path.exists(temp_path):
             try: os.remove(temp_path)
             except: pass
-        # Força o Python a liberar a memória não utilizada agora
+        # Faxina final na memória
         gc.collect()
