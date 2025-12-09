@@ -65,7 +65,7 @@ def get_file_modified_time(service, file_id):
 # --- CARREGAMENTO BASE DE VENDAS (FATURAMENTO) ---
 
 # MUDANÇA 1: cache_resource gasta menos RAM pois não serializa o objeto
-@st.cache_resource(ttl=3600, show_spinner="Carregando do Data Lake (Vendas)...")
+@st.cache_resource(ttl=3600, show_spinner="Acessando Data Lake...")
 def fetch_from_drive():
     # Limpeza preventiva antes de começar
     gc.collect()
@@ -122,12 +122,12 @@ def load_main_base():
         return st.session_state.uploaded_dataframe, st.session_state.get("uploaded_timestamp", "Upload Manual")
     return fetch_from_drive()
 
-# --- CARREGAMENTO BASE CROWLEY (PARQUET - ULTRA OTIMIZADO) ---
+# ... (Mantenha o resto do arquivo igual) ...
 
-# MUDANÇA 1: cache_resource é vital aqui para evitar duplicar a base na memória
-@st.cache_resource(ttl=3600, show_spinner="Acessando base Crowley (Otimizado)...")
+# --- CARREGAMENTO BASE CROWLEY (PARQUET - ULTRA OTIMIZADO) ---
+@st.cache_resource(ttl=3600, show_spinner="Acessando Data Lake...")
 def load_crowley_base():
-    # Limpeza preventiva: tenta liberar espaço da versão antiga se possível
+    # Limpeza preventiva
     gc.collect()
 
     service = get_drive_service()
@@ -148,19 +148,17 @@ def load_crowley_base():
             if col in df.columns:
                 df[col] = df[col].astype("category")
 
-        # OTIMIZAÇÃO: Downcast Numérico
+        # OTIMIZAÇÃO CRÍTICA (CORREÇÃO DE ERRO PYARROW): 
+        # Força conversão para numérico, transformando erros/vazios em NaN e depois em 0
         cols_numericas = ["Volume de Insercoes", "Duracao"]
         for col in cols_numericas:
             if col in df.columns:
-                df[col] = pd.to_numeric(df[col], downcast="integer")
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype("int32")
 
         # DATA: Datetime
         ultima_atualizacao = "N/A"
         if "Data" in df.columns:
-            # Converte e sobrescreve
             df["Data_Dt"] = pd.to_datetime(df["Data"], dayfirst=True, errors="coerce")
-            
-            # Remove a original string para liberar memória
             df.drop(columns=["Data"], inplace=True)
             
             try:
@@ -180,9 +178,7 @@ def load_crowley_base():
         return None, "Erro Leitura"
         
     finally:
-        # Garante que o arquivo temporário no disco seja deletado
         if temp_path and os.path.exists(temp_path):
             try: os.remove(temp_path)
             except: pass
-        # Faxina final na memória
         gc.collect()
