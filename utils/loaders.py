@@ -20,10 +20,6 @@ if not os.path.exists(DATA_FOLDER):
 PATH_VENDAS = os.path.join(DATA_FOLDER, "vendas.parquet")
 PATH_CROWLEY = os.path.join(DATA_FOLDER, "crowley.parquet")
 
-def log(msg):
-    ts = datetime.now().strftime("%H:%M:%S")
-    print(f"[{ts}] {msg}")
-
 # --- AUTH DRIVE ---
 def get_drive_service():
     if "gcp_service_account" not in st.secrets or "drive_files" not in st.secrets:
@@ -43,10 +39,7 @@ def get_drive_service():
 def nuke_and_prepare(files_list):
     """
     Remove arquivos e limpa memória agressivamente ANTES do download.
-    Isso garante que o disco e a RAM estejam o mais livres possível.
     """
-    log("☢️ NUCLEAR: Iniciando limpeza de ambiente...")
-    
     # 1. Limpeza de RAM preliminar
     gc.collect()
     
@@ -55,29 +48,24 @@ def nuke_and_prepare(files_list):
         if os.path.exists(f):
             try:
                 os.remove(f)
-                log(f"🗑️ Deletado: {f}")
-            except Exception as e:
-                log(f"⚠️ Falha ao deletar {f}: {e}")
+            except Exception:
+                pass
     
     # 3. Pausa para o Sistema Operacional liberar os handles
     time.sleep(1)
     gc.collect()
-    log("✨ Ambiente limpo.")
 
 # --- DOWNLOADER ---
 def download_file(service, file_id, dest_path):
     try:
-        log(f"📥 Baixando arquivo novo...")
         with open(dest_path, "wb") as f:
             request = service.files().get_media(fileId=file_id)
             downloader = MediaIoBaseDownload(f, request)
             done = False
             while not done:
                 status, done = downloader.next_chunk()
-        log("✅ Download concluído.")
         return True
-    except Exception as e:
-        log(f"❌ Erro Download: {e}")
+    except Exception:
         return False
 
 # ==========================================
@@ -86,7 +74,6 @@ def download_file(service, file_id, dest_path):
 
 @st.cache_resource(ttl=3600, show_spinner="Atualizando Vendas...")
 def fetch_from_drive():
-    log("🔄 Vendas: Iniciando refresh...")
     nuke_and_prepare([PATH_VENDAS])
     
     service = get_drive_service()
@@ -107,8 +94,7 @@ def fetch_from_drive():
             
             gc.collect()
             return df, ultima
-        except Exception as e:
-            log(f"Erro Vendas: {e}")
+        except Exception:
             return None, None
     return None, None
 
@@ -118,11 +104,9 @@ def load_main_base():
     return fetch_from_drive()
 
 
-# --- CROWLEY (AQUI ESTÁ A CORREÇÃO DE MEMÓRIA) ---
-@st.cache_resource(ttl=180, show_spinner="Atualizando Crowley...")
+# --- CROWLEY ---
+@st.cache_resource(ttl=3600, show_spinner="Atualizando Crowley...")
 def load_crowley_base():
-    log("🚨 CROWLEY: Cache expirado. Executando protocolo de atualização...")
-    
     # 1. DELETA TUDO ANTES
     nuke_and_prepare([PATH_CROWLEY])
     
@@ -136,9 +120,7 @@ def load_crowley_base():
         return None, "Erro Download"
 
     # 3. LEITURA "ZERO-COPY" (SELF DESTRUCT)
-    # Esta é a única maneira de evitar o pico de RAM na conversão Parquet -> Pandas
     try:
-        log("📖 Convertendo PyArrow -> Pandas (Modo Self-Destruct)...")
         gc.collect()
 
         # Lê como tabela PyArrow primeiro (gerencia memória melhor que Pandas direto)
@@ -147,7 +129,6 @@ def load_crowley_base():
         
         # O SEGRED0: self_destruct=True
         # Libera a memória do PyArrow À MEDIDA que cria o Pandas.
-        # Evita ter 2x o tamanho do arquivo na RAM.
         df = arrow_table.to_pandas(self_destruct=True, split_blocks=True)
         
         # Limpa o objeto arrow imediatamente
@@ -155,7 +136,6 @@ def load_crowley_base():
         gc.collect()
         
         # 4. OTIMIZAÇÃO DE TIPOS IN-PLACE
-        log("⚙️ Otimizando tipos...")
         
         # Categorias
         cat_cols = ["Praca", "Emissora", "Anunciante", "Anuncio", "Tipo", "DayPart"]
@@ -188,12 +168,9 @@ def load_crowley_base():
              ts = os.path.getmtime(PATH_CROWLEY)
              ultima = datetime.fromtimestamp(ts).strftime("%d/%m/%Y")
 
-        log(f"✅ Base Carregada! Linhas: {len(df)}")
         return df, ultima
 
-    except Exception as e:
-        log(f"❌ Erro Crítico Memória/Leitura: {e}")
+    except Exception:
         # Limpa para não deixar arquivo corrompido
         if os.path.exists(PATH_CROWLEY): os.remove(PATH_CROWLEY)
         return None, "Erro Leitura"
-

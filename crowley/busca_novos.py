@@ -6,7 +6,29 @@ import io
 from datetime import datetime, timedelta, date
 
 def render(df_crowley, cookies, data_atualizacao):
-    pd.set_option("styler.render.max_elements", 2_000_000)
+    # --- CONFIGURAÇÃO DE PERFORMANCE E VISUAL (Igual ao ECA) ---
+    pd.set_option("styler.render.max_elements", 5_000_000)
+
+    # CSS para centralização
+    st.markdown("""
+        <style>
+        /* Cabeçalhos centralizados */
+        [data-testid="stDataFrame"] th {
+            text-align: center !important;
+            vertical-align: middle !important;
+        }
+        /* Células centralizadas por padrão */
+        [data-testid="stDataFrame"] td {
+            text-align: center !important;
+            vertical-align: middle !important;
+        }
+        /* Alinha à esquerda apenas a primeira coluna de dados (índice ou coluna 0) */
+        [data-testid="stDataFrame"] th[data-testid="stColumnHeader"]:first-child,
+        [data-testid="stDataFrame"] td:first-child {
+            text-align: left !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
 
     # --- Header e Voltar ---
     if st.button("Voltar", key="btn_voltar_topo"):
@@ -150,7 +172,7 @@ def render(df_crowley, cookies, data_atualizacao):
         st.markdown("<br>", unsafe_allow_html=True)
         submitted = st.button("Pesquisar Novos Anunciantes", type="primary", use_container_width=True)
 
-    # --- LÓGICA DE PROCESSAMENTO ---
+    # --- PROCESSAMENTO ---
     
     if submitted:
         st.session_state["novos_search_trigger"] = True
@@ -194,7 +216,7 @@ def render(df_crowley, cookies, data_atualizacao):
             
             df_resultado = df_atual[df_atual["Anunciante"].isin(novos_anunciantes)].copy()
             
-            # --- A) PIVOT TABLE ---
+            # --- TABELA RESUMO (PIVOT) ---
             val_col = "Volume de Insercoes" if "Volume de Insercoes" in df_resultado.columns else "Contagem"
             if val_col == "Contagem": df_resultado["Contagem"] = 1
             agg_func = "sum" if val_col == "Volume de Insercoes" else "count"
@@ -213,10 +235,29 @@ def render(df_crowley, cookies, data_atualizacao):
                 pivot_table["TOTAL"] = pivot_table.sum(axis=1)
                 pivot_table = pivot_table.sort_values(by="TOTAL", ascending=False)
                 
+                # --- ADICIONA TOTALIZADOR (ROW) ---
+                total_row = pivot_table.sum(numeric_only=True)
+                pivot_table.loc["TOTAL GERAL"] = total_row
+                
                 st.markdown("### Visão Geral por Emissora")
                 
+                # Estilização
+                def style_pivot(df):
+                    s = df.style.background_gradient(cmap="Blues", subset=["TOTAL"])
+                    s = s.format("{:.0f}")
+                    # Destaca a linha de total
+                    s = s.apply(lambda x: ["background-color: #f0f2f6; font-weight: bold" if x.name == "TOTAL GERAL" else "" for i in x], axis=1)
+                    # Centralização e Alinhamento
+                    s = s.set_properties(**{'text-align': 'center'})
+                    s = s.set_table_styles([
+                        {'selector': 'th', 'props': [('text-align', 'center'), ('vertical-align', 'middle')]},
+                        {'selector': 'th.row_heading', 'props': [('text-align', 'left')]},
+                        {'selector': 'td', 'props': [('text-align', 'center')]}
+                    ])
+                    return s
+
                 st.dataframe(
-                    pivot_table.style.background_gradient(cmap="Blues", subset=["TOTAL"]).format("{:.0f}"),
+                    style_pivot(pivot_table),
                     width="stretch", 
                     height=min(450, len(pivot_table) * 35 + 40)
                 )
@@ -226,103 +267,94 @@ def render(df_crowley, cookies, data_atualizacao):
 
             st.markdown("<br>", unsafe_allow_html=True)
             
-            # --- B) TABELA DETALHADA ---
+            # --- TABELA DETALHADA ---
             rename_map = {
                 "Praca": "Praça", "Anuncio": "Anúncio", "Duracao": "Duração",
-                "Emissora": "Veículo", "Volume de Insercoes": "Inserções", "Tipo": "Tipo"
+                "Emissora": "Veículo", "Volume de Insercoes": "Inserções", 
+                "Tipo": "Tipo", "DayPart": "DayPart"
             }
             
             df_detalhe = df_resultado.copy()
             if "Data_Dt" in df_detalhe.columns:
                 df_detalhe["Data"] = df_detalhe["Data_Dt"].dt.strftime("%d/%m/%Y")
             
-            cols_originais = ["Data", "Anunciante", "Anuncio", "Duracao", "Praca", "Emissora", "Tipo", "Volume de Insercoes"]
+            # ADICIONADO DAYPART AQUI
+            cols_originais = ["Data", "Anunciante", "Anuncio", "Duracao", "Praca", "Emissora", "Tipo", "DayPart", "Volume de Insercoes"]
             cols_existentes = [c for c in cols_originais if c in df_detalhe.columns]
             
             df_exibicao = df_detalhe[cols_existentes].rename(columns=rename_map)
             df_exibicao.sort_values(by=["Anunciante", "Data"], inplace=True)
 
-            # --- TOTALIZADOR DETALHADA VISUAL (CORRIGIDO) ---
-            df_exibicao_display = df_exibicao.copy()
-            col_insercoes = "Inserções" if "Inserções" in df_exibicao_display.columns else None
-            
-            if col_insercoes:
-                total_insercoes = df_exibicao_display[col_insercoes].sum()
-                
-                # CORREÇÃO: Usa "" em vez de None para evitar warnings de concatenação
-                new_row = {c: "" for c in df_exibicao_display.columns}
-                new_row["Anunciante"] = "TOTAL GERAL"
-                new_row[col_insercoes] = total_insercoes
-                if "Duração" in df_exibicao_display.columns:
-                    new_row["Duração"] = 0 # Garante int se coluna for int
-
-                df_total_row = pd.DataFrame([new_row])
-                df_exibicao_display = pd.concat([df_exibicao_display, df_total_row], ignore_index=True)
-
             with st.expander("Fonte de Dados (Detalhamento)", expanded=False):
-                st.dataframe(
-                    df_exibicao_display,
-                    width="stretch", 
-                    hide_index=True
-                )
+                # Renderiza dataframe puro para evitar gargalo do Styler em grandes volumes
+                st.dataframe(df_exibicao, width="stretch", hide_index=True)
 
             # --- EXPORTAÇÃO EXCEL ---
             st.markdown("---")
-            with st.spinner("Carregando Exportação..."):
-                filtros_dict = {
-                    "Parâmetro": [
-                        "Período de Análise (Início)", "Período de Análise (Fim)",
-                        "Período de Referência (Início)", "Período de Referência (Fim)",
-                        "Praça Selecionada", "Veículo Base", "Filtro Anunciantes"
-                    ],
-                    "Valor": [
-                        dt_ini.strftime("%d/%m/%Y"), dt_fim.strftime("%d/%m/%Y"),
-                        ref_ini.strftime("%d/%m/%Y"), ref_fim.strftime("%d/%m/%Y"),
-                        sel_praca, sel_veiculo,
-                        ", ".join(sel_anunciante) if sel_anunciante else "Todos"
-                    ]
-                }
-                df_filtros_export = pd.DataFrame(filtros_dict)
-                
+            with st.spinner("Gerando Excel..."):
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                    df_filtros_export.to_excel(writer, sheet_name='Filtros', index=False)
-                    worksheet_filtros = writer.sheets['Filtros']
-                    worksheet_filtros.set_column('A:A', 30); worksheet_filtros.set_column('B:B', 50)
+                    workbook = writer.book
                     
-                    if not pivot_table.empty:
-                        pivot_export = pivot_table.copy()
-                        total_row = pivot_export.sum(numeric_only=True)
-                        pivot_export.loc["TOTAL GERAL"] = total_row
-                        
-                        pivot_export.to_excel(writer, sheet_name='Visão Geral')
-                        worksheet_pivot = writer.sheets['Visão Geral']
-                        worksheet_pivot.set_column('A:A', 40) 
+                    # Formatos
+                    fmt_center = workbook.add_format({'align': 'center', 'valign': 'vcenter'})
+                    fmt_left = workbook.add_format({'align': 'left', 'valign': 'vcenter'})
 
+                    # 1. Filtros
+                    filtros_dict = {
+                        "Parâmetro": [
+                            "Período de Análise (Início)", "Período de Análise (Fim)",
+                            "Período de Referência (Início)", "Período de Referência (Fim)",
+                            "Praça Selecionada", "Veículo Base", "Filtro Anunciantes"
+                        ],
+                        "Valor": [
+                            dt_ini.strftime("%d/%m/%Y"), dt_fim.strftime("%d/%m/%Y"),
+                            ref_ini.strftime("%d/%m/%Y"), ref_fim.strftime("%d/%m/%Y"),
+                            sel_praca, sel_veiculo,
+                            ", ".join(sel_anunciante) if sel_anunciante else "Todos"
+                        ]
+                    }
+                    pd.DataFrame(filtros_dict).to_excel(writer, sheet_name='Filtros', index=False)
+                    writer.sheets['Filtros'].set_column('A:A', 30); writer.sheets['Filtros'].set_column('B:B', 50)
+                    
+                    # 2. Visão Geral (Pivot)
+                    if not pivot_table.empty:
+                        # A linha TOTAL GERAL já está no pivot_table exibido, então exportamos direto
+                        pivot_table.to_excel(writer, sheet_name='Visão Geral')
+                        worksheet_pivot = writer.sheets['Visão Geral']
+                        worksheet_pivot.set_column('A:A', 40, fmt_left) 
+                        worksheet_pivot.set_column('B:Z', 15, fmt_center)
+
+                    # 3. Detalhamento
                     if not df_exibicao.empty:
-                        df_exibicao_export = df_exibicao.copy()
+                        # Opcional: Adicionar Total Geral no Excel se desejar (igual ao ECA)
+                        col_insercoes = "Inserções" if "Inserções" in df_exibicao.columns else None
+                        df_export_det = df_exibicao.copy()
+                        
                         if col_insercoes:
-                            total_ins = df_exibicao_export[col_insercoes].sum()
-                            
-                            # CORREÇÃO NA EXPORTAÇÃO: Usa "" em vez de None
-                            new_row_exp = {c: "" for c in df_exibicao_export.columns}
+                            total_ins = df_export_det[col_insercoes].sum()
+                            new_row_exp = {c: "" for c in df_export_det.columns}
                             new_row_exp["Anunciante"] = "TOTAL GERAL"
                             new_row_exp[col_insercoes] = total_ins
-                            if "Duração" in df_exibicao_export.columns:
-                                new_row_exp["Duração"] = 0
+                            if "Duração" in df_export_det.columns: new_row_exp["Duração"] = 0
                             
-                            df_exibicao_export = pd.concat([df_exibicao_export, pd.DataFrame([new_row_exp])], ignore_index=True)
+                            df_export_det = pd.concat([df_export_det, pd.DataFrame([new_row_exp])], ignore_index=True)
 
-                        df_exibicao_export.to_excel(writer, sheet_name='Detalhamento', index=False)
+                        df_export_det.to_excel(writer, sheet_name='Detalhamento', index=False)
                         worksheet_detalhe = writer.sheets['Detalhamento']
-                        worksheet_detalhe.set_column('A:H', 20)
+                        
+                        for idx, col_name in enumerate(df_export_det.columns):
+                            if col_name in ["Anunciante", "Anúncio"]:
+                                worksheet_detalhe.set_column(idx, idx, 35, fmt_left)
+                            else:
+                                worksheet_detalhe.set_column(idx, idx, 15, fmt_center)
 
             c_vazio1, c_vazio2, c_btn, c_vazio3, c_vazio4 = st.columns([1, 1, 1, 1, 1])
             with c_btn:
                 st.download_button(
-                    label="Exportar Relatório Completo (.xlsx)",
+                    label="Exportar Excel", # Texto igual ao ECA
                     data=buffer,
-                    file_name=f"Relatorio_Novos_Anunciantes_{sel_praca.replace(' ', '_')}_{datetime.now().strftime('%d%m%Y')}.xlsx",
+                    file_name=f"Novos_Anunciantes_{sel_praca}_{datetime.now().strftime('%d%m')}.xlsx",
                     mime="application/vnd.ms-excel",
                     type="secondary", 
                     use_container_width=True
