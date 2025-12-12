@@ -325,4 +325,4 @@ def render(df_crowley, cookies, data_atualizacao):
         with c_btn:
             st.download_button("Exportar Excel", data=buf, file_name=f"ECA_{sel_veiculo}_{datetime.now().strftime('%d%m')}.xlsx", mime="application/vnd.ms-excel", type="secondary", use_container_width=True)
         
-        st.markdown(f"<div style='text-align:center;color:#666;font-size:0.8rem;margin-top:5px;'>Atualizado em: {data_atualizacao}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='text-align:center;color:#666;font-size:0.8rem;margin-top:5px;'>Última atualização da base de dados: {data_atualizacao}</div>", unsafe_allow_html=True)

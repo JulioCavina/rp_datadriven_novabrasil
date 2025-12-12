@@ -36,6 +36,7 @@ from pages import (
     relatorio_crowley # <--- NOVO IMPORT
 )
 
+
 # ==================== CONFIGURAÇÕES GERAIS ====================
 st.set_page_config(
     page_title="Dashboard Vendas Ribeirão Preto",
